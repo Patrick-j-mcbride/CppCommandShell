@@ -38,8 +38,15 @@ int main(int argc, char **argv) {
             }
 
             if (!input.empty()) {
+                int orig_stdout_fd = dup(STDOUT_FILENO);
+                int orig_stderr_fd = dup(STDERR_FILENO);
                 vector<string> args = parse_command(input);
                 execute_command(args);
+                dup2(orig_stdout_fd, STDOUT_FILENO);
+                dup2(orig_stderr_fd, STDERR_FILENO);
+
+                close(orig_stdout_fd);
+                close(orig_stderr_fd);
             }
         }
     } else if (argc == 2) {
@@ -49,8 +56,15 @@ int main(int argc, char **argv) {
             string line;
             while (getline(file, line)) {
                 if (!line.empty()) {
+                    int orig_stdout_fd = dup(STDOUT_FILENO);
+                    int orig_stderr_fd = dup(STDERR_FILENO);
                     vector<string> args = parse_command(line);
                     execute_command(args);
+                    dup2(orig_stdout_fd, STDOUT_FILENO);
+                    dup2(orig_stderr_fd, STDERR_FILENO);
+
+                    close(orig_stdout_fd);
+                    close(orig_stderr_fd);
                 }
             }
             file.close();
@@ -105,11 +119,9 @@ void execute_command(const vector<string>& args) {
             if (env_var != nullptr) {
                 cout << env_var << endl;
             }
-        } else {
-            for (size_t i = 1; i < args.size(); ++i) {
-                cout << args[i] << " ";
-            }
-            cout << endl;
+        }
+        else{
+            execute_external(args);
         }
     } else {
         execute_external(args);
