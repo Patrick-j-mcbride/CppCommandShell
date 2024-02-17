@@ -15,11 +15,11 @@
 using namespace std;
 
 // Helper functions declarations
-void execute_command(const vector<string> &args);
+void execute_command(vector<string> &args);
 
-void execute_external(const vector<string> &args);
+void execute_external(vector<string> &args);
 
-vector<string> parse_command(const string &input);
+vector<vector<string>> parse_command(const string &input);
 
 void handle_redirection(vector<string> &tokens);
 
@@ -31,6 +31,8 @@ void execute_cd(const vector<string> &args);
 
 void execute_env_assignment(const vector<string> &args);
 
+void execute_batch_commands(vector<vector<string>> &commands);
+
 int main(int argc, char **argv) {
     // Check command-line arguments to decide the mode of operation
     if (argc == 1) {
@@ -41,17 +43,8 @@ int main(int argc, char **argv) {
             getline(cin, input); // Read input line
 
             if (!input.empty()) { // Check if the input line is not empty
-                // Save the original stdout and stderr file descriptors
-                int orig_stdout_fd = dup(STDOUT_FILENO);
-                int orig_stderr_fd = dup(STDERR_FILENO);
-                vector<string> args = parse_command(input); // Parse the input line
-                execute_command(args); // Execute the command
-                // Restore the original stdout and stderr file descriptors
-                dup2(orig_stdout_fd, STDOUT_FILENO);
-                dup2(orig_stderr_fd, STDERR_FILENO);
-                // Close the duplicated file descriptors
-                close(orig_stdout_fd);
-                close(orig_stderr_fd);
+                vector<vector<string>> commands = parse_command(input); // Parse the input line
+                execute_batch_commands(commands); // Execute the command(s)
             }
         }
     } else if (argc == 2) {
@@ -61,17 +54,8 @@ int main(int argc, char **argv) {
             string line; // Line read from the file
             while (getline(file, line)) { // Read line by line from the file until EOF
                 if (!line.empty()) { // Check if the line is not empty
-                    // Save the original stdout and stderr file descriptors
-                    int orig_stdout_fd = dup(STDOUT_FILENO);
-                    int orig_stderr_fd = dup(STDERR_FILENO);
-                    vector<string> args = parse_command(line); // Parse the line
-                    execute_command(args); // Execute the command
-                    // Restore the original stdout and stderr file descriptors
-                    dup2(orig_stdout_fd, STDOUT_FILENO);
-                    dup2(orig_stderr_fd, STDERR_FILENO);
-                    // Close the duplicated file descriptors
-                    close(orig_stdout_fd);
-                    close(orig_stderr_fd);
+                    vector<vector<string>> commands = parse_command(line); // Parse the input line
+                    execute_batch_commands(commands); // Execute the command(s)
                 }
             }
             file.close(); // Close the file
@@ -92,23 +76,82 @@ int is_env_assignment(const string &input) {
     return regex_match(input, pattern);
 }
 
+void execute_batch_commands(vector<vector<string>> &commands) {
+    vector<pid_t> child_pids;
+
+    for (auto &args : commands) {
+        pid_t pid = fork();
+        if (pid == -1) {
+            // Error handling.
+            perror("fork");
+            exit(EXIT_FAILURE);
+        } else if (pid == 0) {
+            // Child process.
+            execute_command(args);
+            exit(EXIT_SUCCESS); // Ensure child process exits after execution.
+        } else {
+            // Parent process.
+            child_pids.push_back(pid);
+        }
+    }
+
+    // Parent process waits for all child processes to complete.
+    int status;
+    for (pid_t pid : child_pids) {
+        waitpid(pid, &status, 0);
+    }
+}
+
 // Split the input line into command and arguments
-vector<string> parse_command(const string &input) {
+vector<vector<string>> parse_command(const string &input) {
     istringstream iss(input); // Create an input string stream
     vector<string> tokens; // Vector to store the tokens
     string token; // Temporary string to store each token
+    vector<vector<string>> commands; // Vector to store commands separated by parallel operator
+
 
     while (iss >> token) { // Read each token separated by whitespace
-        tokens.push_back(token); // Add the token to the vector
+        // Check if the token contains '&' or '|' and split it into two tokens
+        size_t pos = token.find_first_of("&|");
+        if (pos != string::npos) {
+            if (pos > 0) {
+                tokens.push_back(token.substr(0, pos));
+            }
+            tokens.push_back(token.substr(pos, 1));
+            if (pos + 1 < token.size()) {
+                tokens.push_back(token.substr(pos + 1));
+            }
+        } else {
+            tokens.push_back(token); // Add the token to the vector
+        }
+    }
+    if (tokens[0] == "exit") {
+        // Check if there are any arguments to the exit command, if so print an error message and ignore the command
+        if (tokens.size() > 1) { // If there are more than one argument
+            cerr << "exit: Too many arguments\n";
+            return commands;
+        } else {
+            exit(0); // Exit the program
+        }
     }
 
-    // Handle I/O redirection if present
-    handle_redirection(tokens); // Handle I/O redirection
-    return tokens;
+    // Loop over the tokens and separate the commands by the parallel operator
+    for (size_t i = 0; i < tokens.size(); ++i) {
+        if (tokens[i] == "&") {
+            commands.push_back(vector<string>(tokens.begin(), tokens.begin() + i));
+            tokens.erase(tokens.begin(), tokens.begin() + i + 1);
+            i = 0;
+        }
+    }
+    if (!tokens.empty()) {
+        commands.push_back(tokens);
+    }
+
+    return commands;
 }
 
 // Execute a command with its arguments
-void execute_command(const vector<string> &args) {
+void execute_command(vector<string> &args) {
     if (args.empty()) return; // If no arguments provided, return
 
     // Check for built-in commands
@@ -222,10 +265,12 @@ vector<string>::iterator find_redirection_operator(vector<string> &tokens) {
 }
 
 // Execute an external command
-void execute_external(const vector<string> &args) {
+void execute_external(vector<string> &args) {
     pid_t pid = fork(); // Create a new process
 
     if (pid == 0) { // Child process
+        handle_redirection(args);
+
         char *argv[args.size() + 1];
         for (size_t i = 0; i < args.size(); ++i) {
             argv[i] = const_cast<char *>(args[i].c_str());
