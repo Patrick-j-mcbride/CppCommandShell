@@ -65,14 +65,19 @@ int main(int argc, char **argv) {
 
         vector<string> commandHistory;
         string currentInput;
+        size_t cursorPosition = 0; // Track cursor's position
         int historyIndex = -1;
 
-        cout << "Mish:" << getcwd(nullptr, 0) << "$ " << flush;
+        // Calculate the prompt length dynamically
+        string prompt = "Mish:" + string(getcwd(nullptr, 0)) + "$ ";
+        size_t promptLength = prompt.length();
+
+        cout << prompt << flush;
 
         while (true) {
             char c = '\0';
             if (read(STDIN_FILENO, &c, 1) == 1) {
-                if (c == '\033') { // ESC sequence for arrow keys
+                if (c == '\033') {
                     char seq[3];
                     if (read(STDIN_FILENO, &seq[0], 1) == 1 && seq[0] == '[') {
                         if (read(STDIN_FILENO, &seq[1], 1) == 1) {
@@ -91,13 +96,20 @@ int main(int argc, char **argv) {
                                 }
                                 cout << "\33[2K\r"; // Clear the line
                                 cout << "Mish:" << getcwd(nullptr, 0) << "$ " << currentInput << flush;
-                            } else {
-                                cout << "\a" << "\33[2K\r"; // Clear the line
-                                cout << "Mish:" << getcwd(nullptr, 0) << "$ " << currentInput << flush;
+                            } else if (seq[1] == 'D' && cursorPosition > 0) { // Left arrow
+                                cursorPosition--;
+                            } else if (seq[1] == 'C' && cursorPosition < currentInput.length()) { // Right arrow
+                                cursorPosition++;
+                            } else if (seq[1] == 'D' && cursorPosition > 0) { // Left arrow
+                                cursorPosition--;
                             }
+                            // Redraw the input line with the cursor at the new position
+                            cout << "\33[2K\r" << prompt << currentInput;
+                            cout << "\33[" << (cursorPosition + promptLength + 1) << "G"; // Move cursor with prompt offset
+                            fflush(stdout);
                         }
                     }
-                } else if (c == '\n') { // Enter key
+                } else if (c == '\n') {
                     cout << endl << flush;
                     if (!currentInput.empty()) {
                         commandHistory.push_back(currentInput);
@@ -109,21 +121,26 @@ int main(int argc, char **argv) {
                         currentInput.clear();
                         historyIndex = commandHistory.size();
                     }
-                    cout << "Mish:" << getcwd(nullptr, 0) << "$ " << flush;
-                } else if (c == 127 || c == '\b') { // Backspace handling
-                    if (!currentInput.empty()) {
-                        currentInput.pop_back();
-                        cout << "\33[2K\r"; // Clear the line
-                        cout << "Mish:" << getcwd(nullptr, 0) << "$ " << currentInput << flush;
-                    } else {
-                        cout << "\33[2K\r"; // Clear the line
-                        cout << "Mish:" << getcwd(nullptr, 0) << "$ " << currentInput;
-                        cout << "\a" << flush; // Bell sound
+                    cursorPosition = 0; // Reset cursor position
+                    prompt = "Mish:" + string(getcwd(nullptr, 0)) + "$ "; // Update prompt in case CWD changed
+                    promptLength = prompt.length(); // Update prompt length
+                    cout << prompt << flush;
+                } else if (c == 127 || c == '\b') { // Backspace
+                    if (!currentInput.empty() && cursorPosition > 0) {
+                        currentInput.erase(cursorPosition - 1, 1);
+                        cursorPosition--;
+                        // Redraw input line
+                        cout << "\33[2K\r" << prompt << currentInput;
+                        cout << "\33[" << (cursorPosition + promptLength + 1) << "G"; // Move cursor with prompt offset
+                        fflush(stdout);
                     }
                 } else if (c >= 32 && c <= 126) { // Printable characters
-                    currentInput += c;
-                    cout << "\33[2K\r"; // Clear the line
-                    cout << "Mish:" << getcwd(nullptr, 0) << "$ " << currentInput << flush;
+                    currentInput.insert(cursorPosition, 1, c);
+                    cursorPosition++;
+                    // Redraw input line
+                    cout << "\33[2K\r" << prompt << currentInput;
+                    cout << "\33[" << (cursorPosition + promptLength + 1) << "G"; // Correct cursor position with prompt offset
+                    fflush(stdout);
                 } else if (c == 3) { // Ctrl-C
                     exit(0);
                 } else {
