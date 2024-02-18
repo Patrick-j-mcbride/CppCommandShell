@@ -45,7 +45,7 @@ void pipe_execute(vector<string> &args);
 void disableRawMode();
 
 void enableRawMode() {
-    struct termios raw;
+    struct termios raw{};
 
     tcgetattr(STDIN_FILENO, &raw);
 
@@ -66,7 +66,7 @@ int main(int argc, char **argv) {
         vector<string> commandHistory;
         string currentInput;
         size_t cursorPosition = 0; // Track cursor's position
-        int historyIndex = -1;
+        size_t historyIndex = -1;
 
         // Calculate the prompt length dynamically
         string prompt = "Mish:" + string(getcwd(nullptr, 0)) + "$ ";
@@ -82,7 +82,7 @@ int main(int argc, char **argv) {
                     if (read(STDIN_FILENO, &seq[0], 1) == 1 && seq[0] == '[') {
                         if (read(STDIN_FILENO, &seq[1], 1) == 1) {
                             if (seq[1] == 'A' && !commandHistory.empty()) { // Up arrow
-                                historyIndex = max(0, historyIndex - 1);
+                                historyIndex = max(0, static_cast<int>(historyIndex) - 1);
                                 currentInput = commandHistory[historyIndex];
                                 cout << "\33[2K\r"; // Clear the line
                                 cout << "Mish:" << getcwd(nullptr, 0) << "$ " << currentInput << flush;
@@ -100,10 +100,9 @@ int main(int argc, char **argv) {
                                 cursorPosition--;
                             } else if (seq[1] == 'C' && cursorPosition < currentInput.length()) { // Right arrow
                                 cursorPosition++;
-                            } else if (seq[1] == 'D' && cursorPosition > 0) { // Left arrow
-                                cursorPosition--;
                             }
                             // Redraw the input line with the cursor at the new position
+                            cursorPosition = min(cursorPosition, currentInput.length());
                             cout << "\33[2K\r" << prompt << currentInput;
                             cout << "\33[" << (cursorPosition + promptLength + 1) << "G"; // Move cursor with prompt offset
                             fflush(stdout);
@@ -119,6 +118,8 @@ int main(int argc, char **argv) {
                         vector<vector<string>> commands = parse_command(input, is_parallel, is_piped); // Parse the input line
                         execute_batch_commands(commands, is_parallel, is_piped); // Execute the command(s)
                         currentInput.clear();
+                        // cast to unsigned long to avoid comparison between signed and unsigned integer expressions
+
                         historyIndex = commandHistory.size();
                     }
                     cursorPosition = 0; // Reset cursor position
@@ -204,7 +205,7 @@ void pipe_execute(vector<string> &args) {
 }
 
 void execute_piped_commands(vector<vector<string>> &commands) {
-    int num_commands = commands.size();
+    size_t num_commands = commands.size();
     vector<int> pids;
     int pipefd[2 * (num_commands - 1)]; // Array to hold the file descriptors for all pipes.
 
@@ -319,9 +320,9 @@ vector<vector<string>> parse_command(const string &input, bool &is_parallel, boo
     }
 
     // Loop over the tokens and separate the commands by the parallel operator
-    for (size_t i = 0; i < tokens.size(); ++i) {
+    for (long i = 0; i < tokens.size(); ++i) {
         if (tokens[i] == "&") {
-            parallels.push_back(vector<string>(tokens.begin(), tokens.begin() + i));
+            parallels.emplace_back(tokens.begin(), tokens.begin() + i);
             tokens.erase(tokens.begin(), tokens.begin() + i + 1);
             i = 0;
         }
@@ -337,9 +338,9 @@ vector<vector<string>> parse_command(const string &input, bool &is_parallel, boo
         return parallels;
     } else {
         vector<string> parallel = parallels[0];
-        for (size_t i = 0; i < parallel.size(); ++i) {
+        for (long i = 0; i < parallel.size(); ++i) {
             if (parallel[i] == "|") {
-                pipes.push_back(vector<string>(parallel.begin(), parallel.begin() + i));
+                pipes.emplace_back(parallel.begin(), parallel.begin() + i);
                 parallel.erase(parallel.begin(), parallel.begin() + i + 1);
                 i = 0;
             }
@@ -457,7 +458,7 @@ void handle_redirection(vector<string> &tokens) {
         string op = *it;
         string filename = *next(it);
         tokens.erase(it); // Remove redirection operator
-        it = tokens.erase(it); // Remove filename and update iterator
+        //it = tokens.erase(it); // Remove filename and update iterator
 
         int flags = O_WRONLY | O_CREAT;
         if (op == ">") {
