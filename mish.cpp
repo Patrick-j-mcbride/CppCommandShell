@@ -408,16 +408,38 @@ void execute_env_assignment(const vector<string> &args) {
 }
 
 void execute_cd(const vector<string> &args) {
-    if (args.size() > 2) { // If there are more than one argument
-        cerr << "cd: Too many arguments\n";
-    } else if (args.size() == 1) { // No arguments provided, print error message and ignore the command
-        // No arguments provided, print error message and ignore the command
-        cerr << "cd: Missing argument\n" << flush;
-    } else { // Change the directory to the specified path
-        const char *dir = (args.size() == 2) ? args[1].c_str() : getenv("HOME");
-        if (chdir(dir) != 0) {
-            cerr << "cd: " << strerror(errno) << endl;
+    string path; // Path to change to
+    if (args.size() > 2) {
+        // If there are more than one argument (excluding the command itself), it's an error.
+        cerr << "cd: Too many arguments" << endl;
+        return;
+    }
+
+    if (args.size() == 1) {
+        // No directory argument provided, change to the home directory.
+        char* home = getenv("HOME");
+        if (home == nullptr) {
+            cerr << "cd: HOME environment variable not set" << endl;
+            return;
         }
+        path = home;
+    } else if (args[1] == "~") {
+        // '~' is used, change to the home directory.
+        char* home = getenv("HOME");
+        if (home == nullptr) {
+            cerr << "cd: HOME environment variable not set" << endl;
+            return;
+        }
+        path = home;
+    } else {
+        // Use the provided argument as the path.
+        path = args[1];
+    }
+
+    // Attempt to change the directory.
+    if (chdir(path.c_str()) != 0) {
+        // On failure, output the error.
+        cerr << "cd: " << strerror(errno) << endl;
     }
 }
 
