@@ -11,8 +11,11 @@
 #include <algorithm>
 #include <regex>
 #include <string>
+#include <termios.h>
 
 using namespace std;
+
+struct termios orig_termios;
 
 // Helper functions declarations
 void execute_command(vector<string> &args);
@@ -39,19 +42,93 @@ void execute_piped_commands(vector<vector<string>> &commands);
 
 void pipe_execute(vector<string> &args);
 
+void disableRawMode();
+
+void enableRawMode() {
+    struct termios raw;
+
+    tcgetattr(STDIN_FILENO, &raw);
+
+    raw.c_lflag &= ~(ECHO | ICANON | ISIG); // Disable echoing, canonical mode, and signals
+
+    tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw);
+}
+
+void disableRawMode() {
+    tcsetattr(STDIN_FILENO, TCSAFLUSH, &orig_termios);
+}
+
 int main(int argc, char **argv) {
     // Check command-line arguments to decide the mode of operation
     if (argc == 1) {
+        enableRawMode();
+
+        vector<string> commandHistory;
+        string currentInput;
+        int historyIndex = -1;
+
+        cout << "Mish:" << getcwd(nullptr, 0) << "$ " << flush;
+
         while (true) {
-            string input; // Input line
-
-            cout << "Mish:" << getcwd(nullptr, 0) << "$ " << flush; // Print prompt
-            getline(cin, input); // Read input line
-
-            if (!input.empty()) { // Check if the input line is not empty
-                bool is_parallel, is_piped;
-                vector<vector<string>> commands = parse_command(input, is_parallel, is_piped); // Parse the input line
-                execute_batch_commands(commands, is_parallel, is_piped); // Execute the command(s)
+            char c = '\0';
+            if (read(STDIN_FILENO, &c, 1) == 1) {
+                if (c == '\033') { // ESC sequence for arrow keys
+                    char seq[3];
+                    if (read(STDIN_FILENO, &seq[0], 1) == 1 && seq[0] == '[') {
+                        if (read(STDIN_FILENO, &seq[1], 1) == 1) {
+                            if (seq[1] == 'A' && !commandHistory.empty()) { // Up arrow
+                                historyIndex = max(0, historyIndex - 1);
+                                currentInput = commandHistory[historyIndex];
+                                cout << "\33[2K\r"; // Clear the line
+                                cout << "Mish:" << getcwd(nullptr, 0) << "$ " << currentInput << flush;
+                            } else if (seq[1] == 'B') { // Down arrow
+                                if (historyIndex < (int)commandHistory.size() - 1) {
+                                    historyIndex++;
+                                    currentInput = commandHistory[historyIndex];
+                                } else {
+                                    historyIndex = commandHistory.size(); // Move beyond the last command
+                                    currentInput.clear(); // Ensure we get an empty line
+                                }
+                                cout << "\33[2K\r"; // Clear the line
+                                cout << "Mish:" << getcwd(nullptr, 0) << "$ " << currentInput << flush;
+                            } else {
+                                cout << "\a" << "\33[2K\r"; // Clear the line
+                                cout << "Mish:" << getcwd(nullptr, 0) << "$ " << currentInput << flush;
+                            }
+                        }
+                    }
+                } else if (c == '\n') { // Enter key
+                    cout << endl << flush;
+                    if (!currentInput.empty()) {
+                        commandHistory.push_back(currentInput);
+                        bool is_parallel, is_piped;
+                        string input = currentInput;
+                        currentInput.clear();
+                        vector<vector<string>> commands = parse_command(input, is_parallel, is_piped); // Parse the input line
+                        execute_batch_commands(commands, is_parallel, is_piped); // Execute the command(s)
+                        currentInput.clear();
+                        historyIndex = commandHistory.size();
+                    }
+                    cout << "Mish:" << getcwd(nullptr, 0) << "$ " << flush;
+                } else if (c == 127 || c == '\b') { // Backspace handling
+                    if (!currentInput.empty()) {
+                        currentInput.pop_back();
+                        cout << "\33[2K\r"; // Clear the line
+                        cout << "Mish:" << getcwd(nullptr, 0) << "$ " << currentInput << flush;
+                    } else {
+                        cout << "\33[2K\r"; // Clear the line
+                        cout << "Mish:" << getcwd(nullptr, 0) << "$ " << currentInput;
+                        cout << "\a" << flush; // Bell sound
+                    }
+                } else if (c >= 32 && c <= 126) { // Printable characters
+                    currentInput += c;
+                    cout << "\33[2K\r"; // Clear the line
+                    cout << "Mish:" << getcwd(nullptr, 0) << "$ " << currentInput << flush;
+                } else if (c == 3) { // Ctrl-C
+                    exit(0);
+                } else {
+                    cout << "\a" << flush; // Bell sound
+                }
             }
         }
     } else if (argc == 2) {
@@ -77,6 +154,7 @@ int main(int argc, char **argv) {
         cerr << "Usage: " << argv[0] << " [script file]" << endl << flush; // Print usage
         exit(EXIT_FAILURE); // Exit with an error
     }
+    disableRawMode();
 }
 
 int is_env_assignment(const string &input) {
