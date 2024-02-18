@@ -19,7 +19,7 @@ void execute_command(vector<string> &args);
 
 void execute_external(vector<string> &args);
 
-vector<vector<string>> parse_command(const string &input);
+vector<vector<string>> parse_command(const string &input, bool &is_parallel, bool &is_piped);
 
 void handle_redirection(vector<string> &tokens);
 
@@ -31,7 +31,13 @@ void execute_cd(const vector<string> &args);
 
 void execute_env_assignment(const vector<string> &args);
 
-void execute_batch_commands(vector<vector<string>> &commands);
+void execute_batch_commands(vector<vector<string>> &commands, bool is_parallel, bool is_piped);
+
+void execute_parallel_commands(vector<vector<string>> &commands);
+
+void execute_piped_commands(vector<vector<string>> &commands);
+
+void pipe_execute(vector<string> &args);
 
 int main(int argc, char **argv) {
     // Check command-line arguments to decide the mode of operation
@@ -43,8 +49,9 @@ int main(int argc, char **argv) {
             getline(cin, input); // Read input line
 
             if (!input.empty()) { // Check if the input line is not empty
-                vector<vector<string>> commands = parse_command(input); // Parse the input line
-                execute_batch_commands(commands); // Execute the command(s)
+                bool is_parallel, is_piped;
+                vector<vector<string>> commands = parse_command(input, is_parallel, is_piped); // Parse the input line
+                execute_batch_commands(commands, is_parallel, is_piped); // Execute the command(s)
             }
         }
     } else if (argc == 2) {
@@ -54,8 +61,10 @@ int main(int argc, char **argv) {
             string line; // Line read from the file
             while (getline(file, line)) { // Read line by line from the file until EOF
                 if (!line.empty()) { // Check if the line is not empty
-                    vector<vector<string>> commands = parse_command(line); // Parse the input line
-                    execute_batch_commands(commands); // Execute the command(s)
+                    bool is_parallel, is_piped;
+                    vector<vector<string>> commands = parse_command(line, is_parallel,
+                                                                    is_piped); // Parse the input line
+                    execute_batch_commands(commands, is_parallel, is_piped); // Execute the command(s)
                 }
             }
             file.close(); // Close the file
@@ -76,10 +85,84 @@ int is_env_assignment(const string &input) {
     return regex_match(input, pattern);
 }
 
-void execute_batch_commands(vector<vector<string>> &commands) {
-    vector<pid_t> child_pids;
+void execute_batch_commands(vector<vector<string>> &commands, bool is_parallel, bool is_piped) {
+    if (is_parallel) {
+        execute_parallel_commands(commands);
+    } else if (is_piped) {
+        execute_piped_commands(commands);
+    } else {
+        execute_command(commands[0]);
+    }
+}
 
-    for (auto &args : commands) {
+void pipe_execute(vector<string> &args) {
+    handle_redirection(args);
+
+    char *argv[args.size() + 1];
+    for (size_t i = 0; i < args.size(); ++i) {
+        argv[i] = const_cast<char *>(args[i].c_str());
+    }
+    argv[args.size()] = nullptr;
+
+    execvp(argv[0], argv); // Execute the command
+    cerr << "Command not found: " << string(argv[0]) << endl << flush;
+}
+
+void execute_piped_commands(vector<vector<string>> &commands) {
+    int num_commands = commands.size();
+    vector<int> pids;
+    int pipefd[2 * (num_commands - 1)]; // Array to hold the file descriptors for all pipes.
+
+    // Create the pipes.
+    for (int i = 0; i < num_commands - 1; ++i) {
+        if (pipe(pipefd + i * 2) < 0) {
+            perror("pipe");
+            exit(EXIT_FAILURE);
+        }
+    }
+
+    for (int i = 0; i < num_commands; ++i) {
+        pid_t pid = fork();
+        if (pid == 0) {
+            // For all but the first command, redirect stdin from the previous pipe.
+            if (i > 0) {
+                dup2(pipefd[(i - 1) * 2], STDIN_FILENO);
+            }
+            // For all but the last command, redirect stdout to the next pipe.
+            if (i < num_commands - 1) {
+                dup2(pipefd[i * 2 + 1], STDOUT_FILENO);
+            }
+
+            // Close all pipe file descriptors in the child.
+            for (int j = 0; j < 2 * (num_commands - 1); ++j) {
+                close(pipefd[j]);
+            }
+
+            pipe_execute(commands[i]);
+            exit(EXIT_FAILURE); // Exit with failure if `execvp` returns.
+        } else if (pid < 0) {
+            perror("fork");
+            exit(EXIT_FAILURE);
+        } else {
+            pids.push_back(pid);
+        }
+    }
+
+    // Close all pipe file descriptors in the parent.
+    for (int i = 0; i < 2 * (num_commands - 1); ++i) {
+        close(pipefd[i]);
+    }
+
+    // Wait for all child processes to complete.
+    int status;
+    for (int pid: pids) {
+        waitpid(pid, &status, 0);
+    }
+}
+
+void execute_parallel_commands(vector<vector<string>> &commands) {
+    vector<pid_t> child_pids;
+    for (auto &args: commands) {
         pid_t pid = fork();
         if (pid == -1) {
             // Error handling.
@@ -97,39 +180,44 @@ void execute_batch_commands(vector<vector<string>> &commands) {
 
     // Parent process waits for all child processes to complete.
     int status;
-    for (pid_t pid : child_pids) {
+    for (pid_t pid: child_pids) {
         waitpid(pid, &status, 0);
     }
 }
 
 // Split the input line into command and arguments
-vector<vector<string>> parse_command(const string &input) {
+vector<vector<string>> parse_command(const string &input, bool &is_parallel, bool &is_piped) {
     istringstream iss(input); // Create an input string stream
     vector<string> tokens; // Vector to store the tokens
     string token; // Temporary string to store each token
-    vector<vector<string>> commands; // Vector to store commands separated by parallel operator
-
+    vector<vector<string>> parallels; // Vector to store parallel commands separated by parallel operator
+    vector<vector<string>> pipes; // Vector to store commands separated by pipe operator
 
     while (iss >> token) { // Read each token separated by whitespace
-        // Check if the token contains '&' or '|' and split it into two tokens
-        size_t pos = token.find_first_of("&|");
-        if (pos != string::npos) {
-            if (pos > 0) {
-                tokens.push_back(token.substr(0, pos));
+        // Check if the token contains '&' or '|'
+        string tk = token;
+        size_t pos = tk.find_first_of("&|");
+        while (pos != string::npos) {
+            if (pos == 0) { // If the operator is at the beginning of the token
+                tokens.push_back(tk.substr(0, 1)); // Add the operator to the tokens
+                tk = tk.substr(1); // Remove the operator from the token
+            } else { // If the operator is in the middle
+                tokens.push_back(tk.substr(0, pos)); // Add the command to the tokens
+                tokens.push_back(tk.substr(pos, 1)); // Add the operator to the tokens
+                tk = tk.substr(pos + 1); // Remove the command and operator from the token
             }
-            tokens.push_back(token.substr(pos, 1));
-            if (pos + 1 < token.size()) {
-                tokens.push_back(token.substr(pos + 1));
-            }
-        } else {
-            tokens.push_back(token); // Add the token to the vector
+            pos = tk.find_first_of("&|"); // Find the next operator
+        }
+        if (!tk.empty()) {
+            tokens.push_back(tk);
         }
     }
+
     if (tokens[0] == "exit") {
         // Check if there are any arguments to the exit command, if so print an error message and ignore the command
         if (tokens.size() > 1) { // If there are more than one argument
             cerr << "exit: Too many arguments\n";
-            return commands;
+            return parallels;
         } else {
             exit(0); // Exit the program
         }
@@ -138,16 +226,36 @@ vector<vector<string>> parse_command(const string &input) {
     // Loop over the tokens and separate the commands by the parallel operator
     for (size_t i = 0; i < tokens.size(); ++i) {
         if (tokens[i] == "&") {
-            commands.push_back(vector<string>(tokens.begin(), tokens.begin() + i));
+            parallels.push_back(vector<string>(tokens.begin(), tokens.begin() + i));
             tokens.erase(tokens.begin(), tokens.begin() + i + 1);
             i = 0;
         }
     }
     if (!tokens.empty()) {
-        commands.push_back(tokens);
+        parallels.push_back(tokens);
     }
+    // Check if parallels contains more than one command
+    is_parallel = parallels.size() > 1;
 
-    return commands;
+    if (is_parallel) {
+        is_piped = false;
+        return parallels;
+    } else {
+        vector<string> parallel = parallels[0];
+        for (size_t i = 0; i < parallel.size(); ++i) {
+            if (parallel[i] == "|") {
+                pipes.push_back(vector<string>(parallel.begin(), parallel.begin() + i));
+                parallel.erase(parallel.begin(), parallel.begin() + i + 1);
+                i = 0;
+            }
+        }
+        if (!parallel.empty()) {
+            pipes.push_back(parallel);
+        }
+        is_piped = pipes.size() > 1;
+        is_parallel = false;
+        return pipes;
+    }
 }
 
 // Execute a command with its arguments
