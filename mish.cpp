@@ -367,6 +367,8 @@ void execute_command(vector<string> &args) {
         }
     } else if (args[0] == "cd") { // Check if the command is "cd"
         execute_cd(args);
+    } else if (args[0] == "clear"){
+        cout << "\033[2J\033[1;1H" << flush;
     } else if (args[0] == "export") { // Check if the command is "export"
         // Remove the "export" command and execute the rest as an environment variable assignment
         vector<string> env_args(args.begin() + 1, args.end());
@@ -415,8 +417,8 @@ void execute_cd(const vector<string> &args) {
         return;
     }
 
-    if (args.size() == 1) {
-        // No directory argument provided, change to the home directory.
+    if (args[1] == "..") {
+        // change to the home directory.
         char* home = getenv("HOME");
         if (home == nullptr) {
             cerr << "cd: HOME environment variable not set" << endl;
