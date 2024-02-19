@@ -1,2 +1,1 @@
-mkdir test
-echo "It worked!!" > message.txt
+echo 1 & echo 2 | echo 3

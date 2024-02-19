@@ -22,9 +22,10 @@ void execute_command(vector<string> &args);
 
 void execute_external(vector<string> &args);
 
-vector<vector<string>> parse_command(const string &input, bool &is_parallel, bool &is_piped);
+vector<vector<string>>
+parse_command(const string &input, bool &is_parallel, bool &is_piped, vector<vector<vector<string>>> &pars);
 
-void handle_redirection(vector<string> &tokens);
+bool handle_redirection(vector<string> &tokens);
 
 vector<string>::iterator find_redirection_operator(vector<string> &tokens);
 
@@ -34,7 +35,8 @@ void execute_cd(const vector<string> &args);
 
 void execute_env_assignment(const vector<string> &args);
 
-void execute_batch_commands(vector<vector<string>> &commands, bool is_parallel, bool is_piped);
+void execute_batch_commands(vector<vector<string>> &commands, bool is_parallel, bool is_piped,
+                            vector<vector<vector<string>>> &pars);
 
 void execute_parallel_commands(vector<vector<string>> &commands);
 
@@ -87,7 +89,7 @@ int main(int argc, char **argv) {
                                 cout << "\33[2K\r"; // Clear the line
                                 cout << "Mish:" << getcwd(nullptr, 0) << "$ " << currentInput << flush;
                             } else if (seq[1] == 'B') { // Down arrow
-                                if (historyIndex < (int)commandHistory.size() - 1) {
+                                if (historyIndex < (int) commandHistory.size() - 1) {
                                     historyIndex++;
                                     currentInput = commandHistory[historyIndex];
                                 } else {
@@ -104,7 +106,8 @@ int main(int argc, char **argv) {
                             // Redraw the input line with the cursor at the new position
                             cursorPosition = min(cursorPosition, currentInput.length());
                             cout << "\33[2K\r" << prompt << currentInput;
-                            cout << "\33[" << (cursorPosition + promptLength + 1) << "G"; // Move cursor with prompt offset
+                            cout << "\33[" << (cursorPosition + promptLength + 1)
+                                 << "G"; // Move cursor with prompt offset
                             fflush(stdout);
                         }
                     }
@@ -112,11 +115,14 @@ int main(int argc, char **argv) {
                     cout << endl << flush;
                     if (!currentInput.empty()) {
                         commandHistory.push_back(currentInput);
-                        bool is_parallel, is_piped;
+                        bool is_parallel = false;
+                        bool is_piped = false;
                         string input = currentInput;
                         currentInput.clear();
-                        vector<vector<string>> commands = parse_command(input, is_parallel, is_piped); // Parse the input line
-                        execute_batch_commands(commands, is_parallel, is_piped); // Execute the command(s)
+                        vector<vector<vector<string>>> pars; // Vector to store parallel commands separated by parallel operator
+                        vector<vector<string>> commands = parse_command(input, is_parallel,
+                                                                        is_piped, pars); // Parse the input line
+                        execute_batch_commands(commands, is_parallel, is_piped, pars); // Execute the command(s)
                         currentInput.clear();
                         // cast to unsigned long to avoid comparison between signed and unsigned integer expressions
 
@@ -140,13 +146,34 @@ int main(int argc, char **argv) {
                     cursorPosition++;
                     // Redraw input line
                     cout << "\33[2K\r" << prompt << currentInput;
-                    cout << "\33[" << (cursorPosition + promptLength + 1) << "G"; // Correct cursor position with prompt offset
+                    cout << "\33[" << (cursorPosition + promptLength + 1)
+                         << "G"; // Correct cursor position with prompt offset
                     fflush(stdout);
                 } else if (c == 3) { // Ctrl-C
                     exit(0);
                 } else {
                     cout << "\a" << flush; // Bell sound
                 }
+            }
+        }
+    } else if ((argc == 2) && (string(argv[1])) == "-safe") { // Run with simple interface
+        while (true) {
+            string input;
+
+            cout << "Mish:" << getcwd(nullptr, 0) << "$ ";
+            getline(cin, input);
+
+            if (input == "exit") {
+                exit(0);
+            }
+
+            if (!input.empty()) {
+                bool is_parallel = false;
+                bool is_piped = false;
+                vector<vector<vector<string>>> pars; // Vector to store parallel commands separated by parallel operator
+                vector<vector<string>> commands = parse_command(input, is_parallel,
+                                                                is_piped, pars); // Parse the input line
+                execute_batch_commands(commands, is_parallel, is_piped, pars); // Execute the command(s)
             }
         }
     } else if (argc == 2) {
@@ -156,10 +183,12 @@ int main(int argc, char **argv) {
             string line; // Line read from the file
             while (getline(file, line)) { // Read line by line from the file until EOF
                 if (!line.empty()) { // Check if the line is not empty
-                    bool is_parallel, is_piped;
+                    bool is_parallel = false;
+                    bool is_piped = false;
+                    vector<vector<vector<string>>> pars; // Vector to store parallel commands separated by parallel operator
                     vector<vector<string>> commands = parse_command(line, is_parallel,
-                                                                    is_piped); // Parse the input line
-                    execute_batch_commands(commands, is_parallel, is_piped); // Execute the command(s)
+                                                                    is_piped, pars); // Parse the input line
+                    execute_batch_commands(commands, is_parallel, is_piped, pars); // Execute the command(s)
                 }
             }
             file.close(); // Close the file
@@ -181,8 +210,42 @@ int is_env_assignment(const string &input) {
     return regex_match(input, pattern);
 }
 
-void execute_batch_commands(vector<vector<string>> &commands, bool is_parallel, bool is_piped) {
-    if (is_parallel) {
+void execute_parallel_pipe_commands(vector<vector<vector<string>>> &pars) {
+    vector<pid_t> child_pids;
+
+    for (auto &parls: pars) {
+        pid_t pid = fork();
+        if (pid == -1) {
+            // Error handling.
+            perror("fork");
+            exit(EXIT_FAILURE);
+        } else if (pid == 0) {
+            // Child process.
+            if (parls.size() > 1) {
+                execute_piped_commands(parls);
+            } else {
+                execute_command(parls[0]);
+            }
+            exit(EXIT_SUCCESS); // Ensure child process exits after execution.
+        } else {
+            // Parent process.
+            child_pids.push_back(pid);
+        }
+    }
+
+    // Parent process waits for all child processes to complete.
+    int status;
+    for (pid_t pid: child_pids) {
+        waitpid(pid, &status, 0);
+    }
+}
+
+void execute_batch_commands(vector<vector<string>> &commands, bool is_parallel, bool is_piped,
+                            vector<vector<vector<string>>> &pars) {
+    if (commands.empty()) return; // If no commands provided, return
+    if (is_parallel && is_piped) {
+        execute_parallel_pipe_commands(pars);
+    } else if (is_parallel) {
         execute_parallel_commands(commands);
     } else if (is_piped) {
         execute_piped_commands(commands);
@@ -192,7 +255,9 @@ void execute_batch_commands(vector<vector<string>> &commands, bool is_parallel, 
 }
 
 void pipe_execute(vector<string> &args) {
-    handle_redirection(args);
+    if (!handle_redirection(args)) {
+        exit(EXIT_FAILURE);
+    }
 
     char *argv[args.size() + 1];
     for (size_t i = 0; i < args.size(); ++i) {
@@ -282,7 +347,8 @@ void execute_parallel_commands(vector<vector<string>> &commands) {
 }
 
 // Split the input line into command and arguments
-vector<vector<string>> parse_command(const string &input, bool &is_parallel, bool &is_piped) {
+vector<vector<string>>
+parse_command(const string &input, bool &is_parallel, bool &is_piped, vector<vector<vector<string>>> &pars) {
     istringstream iss(input); // Create an input string stream
     vector<string> tokens; // Vector to store the tokens
     string token; // Temporary string to store each token
@@ -294,6 +360,11 @@ vector<vector<string>> parse_command(const string &input, bool &is_parallel, boo
         string tk = token;
         size_t pos = tk.find_first_of("&|");
         while (pos != string::npos) {
+            if (tk[pos] == '&') {
+                is_parallel = true;
+            } else if (tk[pos] == '|') {
+                is_piped = true;
+            }
             if (pos == 0) { // If the operator is at the beginning of the token
                 tokens.push_back(tk.substr(0, 1)); // Add the operator to the tokens
                 tk = tk.substr(1); // Remove the operator from the token
@@ -319,39 +390,83 @@ vector<vector<string>> parse_command(const string &input, bool &is_parallel, boo
         }
     }
 
-    // Loop over the tokens and separate the commands by the parallel operator
-    for (long i = 0; i < tokens.size(); ++i) {
-        if (tokens[i] == "&") {
-            parallels.emplace_back(tokens.begin(), tokens.begin() + i);
-            tokens.erase(tokens.begin(), tokens.begin() + i + 1);
-            i = 0;
-        }
-    }
-    if (!tokens.empty()) {
-        parallels.push_back(tokens);
-    }
-    // Check if parallels contains more than one command
-    is_parallel = parallels.size() > 1;
-
     if (is_parallel) {
-        is_piped = false;
-        return parallels;
-    } else {
-        vector<string> parallel = parallels[0];
-        for (long i = 0; i < parallel.size(); ++i) {
-            if (parallel[i] == "|") {
-                pipes.emplace_back(parallel.begin(), parallel.begin() + i);
-                parallel.erase(parallel.begin(), parallel.begin() + i + 1);
+        // Loop over the tokens and separate the commands by the parallel operator
+        for (long i = 0; i < tokens.size(); ++i) {
+            if (tokens[i] == "&") {
+                if (i != 0) {
+                    parallels.emplace_back(tokens.begin(), tokens.begin() + i);
+                }
+                tokens.erase(tokens.begin(), tokens.begin() + i + 1);
                 i = 0;
             }
         }
-        if (!parallel.empty()) {
-            pipes.push_back(parallel);
+        if (!tokens.empty()) {
+            parallels.push_back(tokens);
         }
-        is_piped = pipes.size() > 1;
-        is_parallel = false;
+        if (!is_piped) { // only parallel
+            if (parallels.empty()) {
+                is_parallel = false;
+                cerr << "Error: Missing command after parallel operator\n";
+                return parallels;
+            }
+            return parallels;
+        }
+    } else if (is_piped) { // only piped
+        for (long i = 0; i < tokens.size(); ++i) {
+            if (tokens[i] == "|") {
+                pipes.emplace_back(tokens.begin(), tokens.begin() + i);
+                tokens.erase(tokens.begin(), tokens.begin() + i + 1);
+                if (tokens.empty()) {
+                    cerr << "Error: Missing command after pipe operator\n";
+                    pipes.clear();
+                    is_piped = false;
+                    return pipes;
+                }
+                i = 0;
+            }
+        }
+        if (!tokens.empty()) {
+            pipes.push_back(tokens);
+        }
         return pipes;
+    } else { // Normal command
+        return {tokens};
     }
+    // If both parallel and pipe operators are present
+    for (auto &parallel: parallels) {
+        bool is_pipe = false;
+        for (const auto &i: parallel) {
+            if (i == "|") {
+                is_pipe = true;
+            }
+        }
+        if (!is_pipe) {
+            pars.emplace_back(1, parallel);
+        } else {
+            vector<vector<string>> pipe;
+            for (auto i = 0; i < parallel.size(); ++i) {
+                if (parallel[i] == "|") {
+                    pipes.emplace_back(parallel.begin(), parallel.begin() + i);
+                    parallel.erase(parallel.begin(), parallel.begin() + i + 1);
+                    if (parallel.empty()) {
+                        cerr << "Error: Missing command after pipe operator\n";
+                        pipes.clear();
+                        is_parallel = false;
+                        is_piped = false;
+                        return pipes;
+                    }
+                    i = 0;
+                }
+            }
+            if (!parallel.empty()) {
+                pipes.push_back(parallel);
+            }
+            pars.push_back(pipes);
+            pipes.clear();
+        }
+    }
+    return parallels;
 }
 
 // Execute a command with its arguments
@@ -368,7 +483,7 @@ void execute_command(vector<string> &args) {
         }
     } else if (args[0] == "cd") { // Check if the command is "cd"
         execute_cd(args);
-    } else if (args[0] == "clear"){
+    } else if (args[0] == "clear") {
         cout << "\033[2J\033[1;1H" << flush;
     } else if (args[0] == "export") { // Check if the command is "export"
         // Remove the "export" command and execute the rest as an environment variable assignment
@@ -420,7 +535,7 @@ void execute_cd(const vector<string> &args) {
 
     if (args[1] == "..") {
         // change to the home directory.
-        char* home = getenv("HOME");
+        char *home = getenv("HOME");
         if (home == nullptr) {
             cerr << "cd: HOME environment variable not set" << endl;
             return;
@@ -428,7 +543,7 @@ void execute_cd(const vector<string> &args) {
         path = home;
     } else if (args[1] == "~") {
         // '~' is used, change to the home directory.
-        char* home = getenv("HOME");
+        char *home = getenv("HOME");
         if (home == nullptr) {
             cerr << "cd: HOME environment variable not set" << endl;
             return;
@@ -447,18 +562,18 @@ void execute_cd(const vector<string> &args) {
 }
 
 // Handles I/O redirection in a given command
-void handle_redirection(vector<string> &tokens) {
+bool handle_redirection(vector<string> &tokens) {
     auto it = find_redirection_operator(tokens); // Find the first redirection operator
     while (it != tokens.end()) {
         if (next(it) == tokens.end()) {
             cerr << "Redirection error: Missing filename\n";
-            return;
+            return false;
         }
 
         string op = *it;
         string filename = *next(it);
         tokens.erase(it); // Remove redirection operator
-        //it = tokens.erase(it); // Remove filename and update iterator
+        it = tokens.erase(it); // Remove filename and update iterator
 
         int flags = O_WRONLY | O_CREAT;
         if (op == ">") {
@@ -472,7 +587,7 @@ void handle_redirection(vector<string> &tokens) {
         int fd = open(filename.c_str(), flags, 0644);
         if (fd == -1) {
             cerr << "Redirection error: " << strerror(errno) << endl;
-            return;
+            return false;
         }
 
         if (op == "<") {
@@ -484,6 +599,7 @@ void handle_redirection(vector<string> &tokens) {
 
         it = find_redirection_operator(tokens); // Check if there are more redirections
     }
+    return true;
 }
 
 // Finds redirection operators (>, >>, <) position in the command tokens
@@ -497,7 +613,9 @@ void execute_external(vector<string> &args) {
     pid_t pid = fork(); // Create a new process
 
     if (pid == 0) { // Child process
-        handle_redirection(args);
+        if (!handle_redirection(args)) {
+            exit(EXIT_FAILURE);
+        }
 
         char *argv[args.size() + 1];
         for (size_t i = 0; i < args.size(); ++i) {
