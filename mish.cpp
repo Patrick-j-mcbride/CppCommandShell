@@ -11,6 +11,8 @@
 #include <algorithm>
 #include <regex>
 #include <string>
+#include <readline/readline.h>
+#include <readline/history.h>
 
 using namespace std;
 
@@ -379,21 +381,27 @@ void execute_external(vector<string> &args) {
 }
 
 int main(int argc, char **argv) {
-    // Check command-line arguments to decide the mode of operation
+    // Initialize Readline's history
+    using_history();
+
     if (argc == 1) { // No filename provided, run in interactive mode
+        char *input;
+
         while (true) {
-            string input;
+            string prompt = "Mish:" + string(getcwd(nullptr, 0)) + "$ ";
+            input = readline(prompt.c_str()); // Read the input line with Readline
 
-            cout << "Mish:" << getcwd(nullptr, 0) << "$ ";
-            getline(cin, input); // Read the input line
+            if (input && *input) { // Check if the input line is not empty
+                add_history(input); // Add the input to the history list
 
-            if (!input.empty()) { // Check if the input line is not empty
-                Parser parser(input);
+                string inputStr(input);
+                Parser parser(inputStr);
                 execute_all_commands(parser);
             }
+
+            free(input); // Free the input line
         }
-    } else if (argc == 2) {
-        // Filename provided, run commands from the file (non-interactive mode)
+    } else if (argc == 2) { // Filename provided, run commands from the file (non-interactive mode)
         ifstream file(argv[1]);
         if (file.is_open()) {
             string line; // Line read from the file
@@ -408,8 +416,7 @@ int main(int argc, char **argv) {
             cerr << "Failed to open file: " << strerror(errno) << endl << flush; // Print error message
             exit(EXIT_FAILURE); // Exit with an error
         }
-    } else {
-        // More than one argument provided
+    } else { // More than one argument provided
         cerr << "Usage: " << argv[0] << " [script file]" << endl << flush; // Print usage
         exit(EXIT_FAILURE); // Exit with an error
     }
