@@ -7,12 +7,12 @@ EXECUTABLE=Mish
 # Attempt to use pkg-config to find Readline
 PKG_CONFIG := $(shell command -v pkg-config 2> /dev/null)
 ifdef PKG_CONFIG
-READLINE_CFLAGS := $(shell pkg-config --cflags readline)
-READLINE_LIBS := $(shell pkg-config --libs readline)
+READLINE_CFLAGS := $(shell pkg-config --cflags readline 2> /dev/null)
+READLINE_LIBS := $(shell pkg-config --libs readline 2> /dev/null)
 else
 # Fallback for macOS or if pkg-config is not available
-READLINE_CFLAGS=$(shell find /usr/include /usr/local/include -name readline.h -exec dirname {} \\;)
-READLINE_LIBS=$(shell find /usr/lib /usr/local/lib -name libreadline.a -or -name libreadline.so -exec dirname {} \\;)
+READLINE_CFLAGS=$(shell find /usr/include /usr/local/include -name readline.h -exec dirname {} \;)
+READLINE_LIBS=$(shell find /usr/lib /usr/local/lib -name libreadline.a -or -name libreadline.so -exec dirname {} \;)
 endif
 
 ifndef READLINE_CFLAGS
@@ -29,6 +29,6 @@ $(EXECUTABLE): $(OBJECTS)
 
 .cpp.o:
 	$(CC) $(CXXFLAGS) -c $< -o $@
-
+	
 clean:
 	rm -rf *o $(EXECUTABLE)
