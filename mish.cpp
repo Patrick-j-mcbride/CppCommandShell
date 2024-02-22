@@ -11,250 +11,136 @@
 #include <algorithm>
 #include <regex>
 #include <string>
-#include <termios.h>
 
 using namespace std;
 
-struct termios orig_termios;
+class Command {
+
+public:
+    vector<string> args; // Public member variable to store the string
+    bool piped = false;
+    bool parallel = false;
+
+    // Constructor that takes a string and stores it in the data member
+    explicit Command(const vector<string> &input, bool is_piped = false, bool is_parallel = false) {
+        args = input;
+        piped = is_piped;
+        parallel = is_parallel;
+    }
+};
+
+class Parser {
+public:
+    string data; // Public member variable to store the string
+    vector<string> tokens; // Vector to store the tokens
+    vector<Command> commands; // Vector to store the commands
+    bool has_pipe = false;
+    bool has_parallel = false;
+    bool is_basic = false;
+    bool is_valid = true;
+
+    // Constructor that takes a string and stores it in the data member
+    explicit Parser(const string &input) {
+        data = input;
+        split();
+        parse();
+    }
+
+    // Method to split the input line into tokens
+    void split() {
+        istringstream iss(data); // Create an input string stream
+        string token; // Temporary string to store each token
+        while (iss >> token) { // Read each token separated by whitespace
+            tokens.push_back(token); // Add the token to the vector
+            if (token == "|") { // Check if the token is a pipe operator
+                has_pipe = true;
+            } else if (token == "&") { // Check if the token is a parallel operator
+                has_parallel = true;
+            }
+        }
+        is_basic = !has_pipe && !has_parallel; // Check if the input line is a basic command
+    }
+
+    void parse() {
+        if (is_basic) {
+            commands.emplace_back(tokens);
+        } else {
+            vector<string> args;
+            bool last_was_pipe = false;
+            for (auto i = 0; i < tokens.size(); ++i) {
+                if (tokens[i] == "|") {
+                    if (args.empty()) { // pipe operator at the beginning
+                        is_valid = false;
+                        cerr << "Error: Missing command before pipe operator\n";
+                        return;
+                    } else if (i == tokens.size() - 1) { // pipe operator at the end
+                        is_valid = false;
+                        cerr << "Error: Missing command after pipe operator\n";
+                        return;
+                    } else { // pipe operator in the middle
+                        commands.emplace_back(args, true, false);
+                        last_was_pipe = true;
+                        args.clear(); // clear the args vector
+                    }
+                } else if (tokens[i] == "&") { // parallel operator
+                    if (args.empty()) { // parallel operator at the beginning
+                        is_valid = false;
+                        cerr << "Error: Missing command before parallel operator\n";
+                        return;
+                    } else if ((i != tokens.size() - 1) && (tokens[i + 1] == "|")) { // parallel pipe
+                        commands.emplace_back(args, true, true);
+                        last_was_pipe = true;
+                        args.clear(); // clear the args vector
+                        i += 1; // skip the next token
+                    } else { // parallel operator at the end
+                        commands.emplace_back(args, last_was_pipe, true);
+                        args.clear(); // clear the args vector
+                    }
+                } else {
+                    args.push_back(tokens[i]);
+                    if (i == tokens.size() - 1) { // last command
+                        commands.emplace_back(args, last_was_pipe, false);
+                    }
+                }
+            }
+        }
+    }
+
+    int get_pipe_count() {
+        int count = 0;
+        for (auto &command: commands) {
+            if (command.piped) {
+                count += 1;
+            }
+        }
+        return count;
+    }
+};
+
 
 // Helper functions declarations
-void execute_command(vector<string> &args);
-
-void execute_external(vector<string> &args);
-
-vector<vector<string>>
-parse_command(const string &input, bool &is_parallel, bool &is_piped, vector<vector<vector<string>>> &pars);
+vector<string>::iterator find_redirection_operator(vector<string> &tokens);
 
 bool handle_redirection(vector<string> &tokens);
 
-vector<string>::iterator find_redirection_operator(vector<string> &tokens);
-
 int is_env_assignment(const string &input);
+
+void execute_all_commands(Parser &parser);
 
 void execute_cd(const vector<string> &args);
 
+void execute_command(vector<string> &args);
+
 void execute_env_assignment(const vector<string> &args);
 
-void execute_batch_commands(vector<vector<string>> &commands, bool is_parallel, bool is_piped,
-                            vector<vector<vector<string>>> &pars);
+void execute_external(vector<string> &args);
 
-void execute_parallel_commands(vector<vector<string>> &commands);
+void execute_from_parser(Parser &parser);
 
-void execute_piped_commands(vector<vector<string>> &commands);
+void safe_execute(vector<string> &args);
 
-void pipe_execute(vector<string> &args);
 
-void disableRawMode();
-
-void enableRawMode() {
-    struct termios raw{};
-
-    tcgetattr(STDIN_FILENO, &raw);
-
-    raw.c_lflag &= ~(ECHO | ICANON | ISIG); // Disable echoing, canonical mode, and signals
-
-    tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw);
-}
-
-void disableRawMode() {
-    tcsetattr(STDIN_FILENO, TCSAFLUSH, &orig_termios);
-}
-
-int main(int argc, char **argv) {
-    // Check command-line arguments to decide the mode of operation
-    if (argc == 1) {
-        enableRawMode();
-
-        vector<string> commandHistory;
-        string currentInput;
-        size_t cursorPosition = 0; // Track cursor's position
-        size_t historyIndex = -1;
-
-        // Calculate the prompt length dynamically
-        string prompt = "Mish:" + string(getcwd(nullptr, 0)) + "$ ";
-        size_t promptLength = prompt.length();
-
-        cout << prompt << flush;
-
-        while (true) {
-            char c = '\0';
-            if (read(STDIN_FILENO, &c, 1) == 1) {
-                if (c == '\033') {
-                    char seq[3];
-                    if (read(STDIN_FILENO, &seq[0], 1) == 1 && seq[0] == '[') {
-                        if (read(STDIN_FILENO, &seq[1], 1) == 1) {
-                            if (seq[1] == 'A' && !commandHistory.empty()) { // Up arrow
-                                historyIndex = max(0, static_cast<int>(historyIndex) - 1);
-                                currentInput = commandHistory[historyIndex];
-                                cout << "\33[2K\r"; // Clear the line
-                                cout << "Mish:" << getcwd(nullptr, 0) << "$ " << currentInput << flush;
-                            } else if (seq[1] == 'B') { // Down arrow
-                                if (historyIndex < (int) commandHistory.size() - 1) {
-                                    historyIndex++;
-                                    currentInput = commandHistory[historyIndex];
-                                } else {
-                                    historyIndex = commandHistory.size(); // Move beyond the last command
-                                    currentInput.clear(); // Ensure we get an empty line
-                                }
-                                cout << "\33[2K\r"; // Clear the line
-                                cout << "Mish:" << getcwd(nullptr, 0) << "$ " << currentInput << flush;
-                            } else if (seq[1] == 'D' && cursorPosition > 0) { // Left arrow
-                                cursorPosition--;
-                            } else if (seq[1] == 'C' && cursorPosition < currentInput.length()) { // Right arrow
-                                cursorPosition++;
-                            }
-                            // Redraw the input line with the cursor at the new position
-                            cursorPosition = min(cursorPosition, currentInput.length());
-                            cout << "\33[2K\r" << prompt << currentInput;
-                            cout << "\33[" << (cursorPosition + promptLength + 1)
-                                 << "G"; // Move cursor with prompt offset
-                            fflush(stdout);
-                        }
-                    }
-                } else if (c == '\n') {
-                    cout << endl << flush;
-                    if (!currentInput.empty()) {
-                        commandHistory.push_back(currentInput);
-                        bool is_parallel = false;
-                        bool is_piped = false;
-                        string input = currentInput;
-                        currentInput.clear();
-                        vector<vector<vector<string>>> pars; // Vector to store parallel commands separated by parallel operator
-                        vector<vector<string>> commands = parse_command(input, is_parallel,
-                                                                        is_piped, pars); // Parse the input line
-                        execute_batch_commands(commands, is_parallel, is_piped, pars); // Execute the command(s)
-                        currentInput.clear();
-                        // cast to unsigned long to avoid comparison between signed and unsigned integer expressions
-
-                        historyIndex = commandHistory.size();
-                    }
-                    cursorPosition = 0; // Reset cursor position
-                    prompt = "Mish:" + string(getcwd(nullptr, 0)) + "$ "; // Update prompt in case CWD changed
-                    promptLength = prompt.length(); // Update prompt length
-                    cout << prompt << flush;
-                } else if (c == 127 || c == '\b') { // Backspace
-                    if (!currentInput.empty() && cursorPosition > 0) {
-                        currentInput.erase(cursorPosition - 1, 1);
-                        cursorPosition--;
-                        // Redraw input line
-                        cout << "\33[2K\r" << prompt << currentInput;
-                        cout << "\33[" << (cursorPosition + promptLength + 1) << "G"; // Move cursor with prompt offset
-                        fflush(stdout);
-                    }
-                } else if (c >= 32 && c <= 126) { // Printable characters
-                    currentInput.insert(cursorPosition, 1, c);
-                    cursorPosition++;
-                    // Redraw input line
-                    cout << "\33[2K\r" << prompt << currentInput;
-                    cout << "\33[" << (cursorPosition + promptLength + 1)
-                         << "G"; // Correct cursor position with prompt offset
-                    fflush(stdout);
-                } else if (c == 3) { // Ctrl-C
-                    exit(0);
-                } else {
-                    cout << "\a" << flush; // Bell sound
-                }
-            }
-        }
-    } else if ((argc == 2) && (string(argv[1])) == "-safe") { // Run with simple interface
-        while (true) {
-            string input;
-
-            cout << "Mish:" << getcwd(nullptr, 0) << "$ ";
-            getline(cin, input);
-
-            if (input == "exit") {
-                exit(0);
-            }
-
-            if (!input.empty()) {
-                bool is_parallel = false;
-                bool is_piped = false;
-                vector<vector<vector<string>>> pars; // Vector to store parallel commands separated by parallel operator
-                vector<vector<string>> commands = parse_command(input, is_parallel,
-                                                                is_piped, pars); // Parse the input line
-                execute_batch_commands(commands, is_parallel, is_piped, pars); // Execute the command(s)
-            }
-        }
-    } else if (argc == 2) {
-        // Filename provided, run commands from the file (non-interactive mode)
-        ifstream file(argv[1]);
-        if (file.is_open()) {
-            string line; // Line read from the file
-            while (getline(file, line)) { // Read line by line from the file until EOF
-                if (!line.empty()) { // Check if the line is not empty
-                    bool is_parallel = false;
-                    bool is_piped = false;
-                    vector<vector<vector<string>>> pars; // Vector to store parallel commands separated by parallel operator
-                    vector<vector<string>> commands = parse_command(line, is_parallel,
-                                                                    is_piped, pars); // Parse the input line
-                    execute_batch_commands(commands, is_parallel, is_piped, pars); // Execute the command(s)
-                }
-            }
-            file.close(); // Close the file
-        } else { // Failed to open the file
-            cerr << "Failed to open file: " << strerror(errno) << endl << flush; // Print error message
-            exit(EXIT_FAILURE); // Exit with an error
-        }
-    } else {
-        // More than one argument provided
-        cerr << "Usage: " << argv[0] << " [script file]" << endl << flush; // Print usage
-        exit(EXIT_FAILURE); // Exit with an error
-    }
-    disableRawMode();
-}
-
-int is_env_assignment(const string &input) {
-    //check if the command is an environment variable assignment
-    regex pattern("^.+?=.+?$"); // Match any string followed by an equal sign and another string
-    return regex_match(input, pattern);
-}
-
-void execute_parallel_pipe_commands(vector<vector<vector<string>>> &pars) {
-    vector<pid_t> child_pids;
-
-    for (auto &parls: pars) {
-        pid_t pid = fork();
-        if (pid == -1) {
-            // Error handling.
-            perror("fork");
-            exit(EXIT_FAILURE);
-        } else if (pid == 0) {
-            // Child process.
-            if (parls.size() > 1) {
-                execute_piped_commands(parls);
-            } else {
-                execute_command(parls[0]);
-            }
-            exit(EXIT_SUCCESS); // Ensure child process exits after execution.
-        } else {
-            // Parent process.
-            child_pids.push_back(pid);
-        }
-    }
-
-    // Parent process waits for all child processes to complete.
-    int status;
-    for (pid_t pid: child_pids) {
-        waitpid(pid, &status, 0);
-    }
-}
-
-void execute_batch_commands(vector<vector<string>> &commands, bool is_parallel, bool is_piped,
-                            vector<vector<vector<string>>> &pars) {
-    if (commands.empty()) return; // If no commands provided, return
-    if (is_parallel && is_piped) {
-        execute_parallel_pipe_commands(pars);
-    } else if (is_parallel) {
-        execute_parallel_commands(commands);
-    } else if (is_piped) {
-        execute_piped_commands(commands);
-    } else {
-        execute_command(commands[0]);
-    }
-}
-
-void pipe_execute(vector<string> &args) {
+void safe_execute(vector<string> &args) {
     if (!handle_redirection(args)) {
         exit(EXIT_FAILURE);
     }
@@ -269,210 +155,73 @@ void pipe_execute(vector<string> &args) {
     cerr << "Command not found: " << string(argv[0]) << endl << flush;
 }
 
-void execute_piped_commands(vector<vector<string>> &commands) {
-    size_t num_commands = commands.size();
-    vector<int> pids;
-    int pipefd[2 * (num_commands - 1)]; // Array to hold the file descriptors for all pipes.
+void execute_from_parser(Parser &parser) {
+    vector<pid_t> child_pids;
+    int num_commands = parser.get_pipe_count() - 1;
+    int pipefd[2 * num_commands];
+    int count = -1;
 
     // Create the pipes.
-    for (int i = 0; i < num_commands - 1; ++i) {
+    for (int i = 0; i < num_commands; ++i) {
         if (pipe(pipefd + i * 2) < 0) {
             perror("pipe");
             exit(EXIT_FAILURE);
         }
     }
 
-    for (int i = 0; i < num_commands; ++i) {
-        pid_t pid = fork();
+    for (auto &command: parser.commands) { // Loop over the commands
+        if (command.piped) { count += 1; } // Increment the count for each piped command
+        pid_t pid = fork(); // Create a new process
         if (pid == 0) {
-            // For all but the first command, redirect stdin from the previous pipe.
-            if (i > 0) {
-                dup2(pipefd[(i - 1) * 2], STDIN_FILENO);
+            if (command.piped) {
+                if (count > 0) { // For all but the first command, redirect stdin from the previous pipe
+                    dup2(pipefd[(count - 1) * 2], STDIN_FILENO);
+                }
+                if (count < num_commands) { // For all but the last command, redirect stdout to the next pipe
+                    dup2(pipefd[2 * count + 1], STDOUT_FILENO);
+                }
+                for (int i = 0; i < 2 * num_commands; ++i) {
+                    close(pipefd[i]);
+                }
             }
-            // For all but the last command, redirect stdout to the next pipe.
-            if (i < num_commands - 1) {
-                dup2(pipefd[i * 2 + 1], STDOUT_FILENO);
-            }
-
-            // Close all pipe file descriptors in the child.
-            for (int j = 0; j < 2 * (num_commands - 1); ++j) {
-                close(pipefd[j]);
-            }
-
-            pipe_execute(commands[i]);
-            exit(EXIT_FAILURE); // Exit with failure if `execvp` returns.
+            safe_execute(command.args);
+            exit(EXIT_SUCCESS);
         } else if (pid < 0) {
             perror("fork");
             exit(EXIT_FAILURE);
-        } else {
-            pids.push_back(pid);
-        }
-    }
-
-    // Close all pipe file descriptors in the parent.
-    for (int i = 0; i < 2 * (num_commands - 1); ++i) {
-        close(pipefd[i]);
-    }
-
-    // Wait for all child processes to complete.
-    int status;
-    for (int pid: pids) {
-        waitpid(pid, &status, 0);
-    }
-}
-
-void execute_parallel_commands(vector<vector<string>> &commands) {
-    vector<pid_t> child_pids;
-    for (auto &args: commands) {
-        pid_t pid = fork();
-        if (pid == -1) {
-            // Error handling.
-            perror("fork");
-            exit(EXIT_FAILURE);
-        } else if (pid == 0) {
-            // Child process.
-            execute_command(args);
-            exit(EXIT_SUCCESS); // Ensure child process exits after execution.
-        } else {
-            // Parent process.
+        } else if (!command.parallel) { // Parent process: check if the command is not parallel
             child_pids.push_back(pid);
         }
     }
 
-    // Parent process waits for all child processes to complete.
+    // Close all pipe file descriptors in the parent.
+    for (int i = 0; i < 2 * num_commands; ++i) {
+        close(pipefd[i]);
+    }
+
+    // Wait for all non-parallel child processes to complete.
     int status;
-    for (pid_t pid: child_pids) {
+    for (int pid: child_pids) {
         waitpid(pid, &status, 0);
     }
 }
 
-// Split the input line into command and arguments
-vector<vector<string>>
-parse_command(const string &input, bool &is_parallel, bool &is_piped, vector<vector<vector<string>>> &pars) {
-    istringstream iss(input); // Create an input string stream
-    vector<string> tokens; // Vector to store the tokens
-    string token; // Temporary string to store each token
-    vector<vector<string>> parallels; // Vector to store parallel commands separated by parallel operator
-    vector<vector<string>> pipes; // Vector to store commands separated by pipe operator
-
-    while (iss >> token) { // Read each token separated by whitespace
-        // Check if the token contains '&' or '|'
-        string tk = token;
-        size_t pos = tk.find_first_of("&|");
-        while (pos != string::npos) {
-            if (tk[pos] == '&') {
-                is_parallel = true;
-            } else if (tk[pos] == '|') {
-                is_piped = true;
-            }
-            if (pos == 0) { // If the operator is at the beginning of the token
-                tokens.push_back(tk.substr(0, 1)); // Add the operator to the tokens
-                tk = tk.substr(1); // Remove the operator from the token
-            } else { // If the operator is in the middle
-                tokens.push_back(tk.substr(0, pos)); // Add the command to the tokens
-                tokens.push_back(tk.substr(pos, 1)); // Add the operator to the tokens
-                tk = tk.substr(pos + 1); // Remove the command and operator from the token
-            }
-            pos = tk.find_first_of("&|"); // Find the next operator
-        }
-        if (!tk.empty()) {
-            tokens.push_back(tk);
-        }
+void execute_all_commands(Parser &parser) {
+    if (!parser.is_valid) { return; } // If the input line is not valid, return
+    if (parser.is_basic) { // If the input line is a basic command
+        execute_command(parser.commands[0].args);
+    } else {
+        execute_from_parser(parser);
     }
-
-    if (tokens[0] == "exit") {
-        // Check if there are any arguments to the exit command, if so print an error message and ignore the command
-        if (tokens.size() > 1) { // If there are more than one argument
-            cerr << "exit: Too many arguments\n";
-            return parallels;
-        } else {
-            exit(0); // Exit the program
-        }
-    }
-
-    if (is_parallel) {
-        // Loop over the tokens and separate the commands by the parallel operator
-        for (long i = 0; i < tokens.size(); ++i) {
-            if (tokens[i] == "&") {
-                if (i != 0) {
-                    parallels.emplace_back(tokens.begin(), tokens.begin() + i);
-                }
-                tokens.erase(tokens.begin(), tokens.begin() + i + 1);
-                i = 0;
-            }
-        }
-        if (!tokens.empty()) {
-            parallels.push_back(tokens);
-        }
-        if (!is_piped) { // only parallel
-            if (parallels.empty()) {
-                is_parallel = false;
-                cerr << "Error: Missing command after parallel operator\n";
-                return parallels;
-            }
-            return parallels;
-        }
-    } else if (is_piped) { // only piped
-        for (long i = 0; i < tokens.size(); ++i) {
-            if (tokens[i] == "|") {
-                pipes.emplace_back(tokens.begin(), tokens.begin() + i);
-                tokens.erase(tokens.begin(), tokens.begin() + i + 1);
-                if (tokens.empty()) {
-                    cerr << "Error: Missing command after pipe operator\n";
-                    pipes.clear();
-                    is_piped = false;
-                    return pipes;
-                }
-                i = 0;
-            }
-        }
-        if (!tokens.empty()) {
-            pipes.push_back(tokens);
-        }
-        return pipes;
-    } else { // Normal command
-        return {tokens};
-    }
-    // If both parallel and pipe operators are present
-    for (auto &parallel: parallels) {
-        bool is_pipe = false;
-        for (const auto &i: parallel) {
-            if (i == "|") {
-                is_pipe = true;
-            }
-        }
-        if (!is_pipe) {
-            pars.emplace_back(1, parallel);
-        } else {
-            vector<vector<string>> pipe;
-            for (auto i = 0; i < parallel.size(); ++i) {
-                if (parallel[i] == "|") {
-                    pipes.emplace_back(parallel.begin(), parallel.begin() + i);
-                    parallel.erase(parallel.begin(), parallel.begin() + i + 1);
-                    if (parallel.empty()) {
-                        cerr << "Error: Missing command after pipe operator\n";
-                        pipes.clear();
-                        is_parallel = false;
-                        is_piped = false;
-                        return pipes;
-                    }
-                    i = 0;
-                }
-            }
-            if (!parallel.empty()) {
-                pipes.push_back(parallel);
-            }
-            pars.push_back(pipes);
-            pipes.clear();
-        }
-    }
-    return parallels;
 }
 
-// Execute a command with its arguments
-void execute_command(vector<string> &args) {
-    if (args.empty()) return; // If no arguments provided, return
+int is_env_assignment(const string &input) {
+    //check if the command is an environment variable assignment
+    regex pattern("^.+?=.+?$"); // Match any string followed by an equal sign and another string
+    return regex_match(input, pattern);
+}
 
+void execute_command(vector<string> &args) {
     // Check for built-in commands
     if (args[0] == "exit") {
         // Check if there are any arguments to the exit command, if so print an error message and ignore the command
@@ -483,8 +232,6 @@ void execute_command(vector<string> &args) {
         }
     } else if (args[0] == "cd") { // Check if the command is "cd"
         execute_cd(args);
-    } else if (args[0] == "clear") {
-        cout << "\033[2J\033[1;1H" << flush;
     } else if (args[0] == "export") { // Check if the command is "export"
         // Remove the "export" command and execute the rest as an environment variable assignment
         vector<string> env_args(args.begin() + 1, args.end());
@@ -561,7 +308,6 @@ void execute_cd(const vector<string> &args) {
     }
 }
 
-// Handles I/O redirection in a given command
 bool handle_redirection(vector<string> &tokens) {
     auto it = find_redirection_operator(tokens); // Find the first redirection operator
     while (it != tokens.end()) {
@@ -602,13 +348,11 @@ bool handle_redirection(vector<string> &tokens) {
     return true;
 }
 
-// Finds redirection operators (>, >>, <) position in the command tokens
 vector<string>::iterator find_redirection_operator(vector<string> &tokens) {
     return find_if(tokens.begin(), tokens.end(),
                    [](const string &s) { return s == ">" || s == ">>" || s == "<"; });
 }
 
-// Execute an external command
 void execute_external(vector<string> &args) {
     pid_t pid = fork(); // Create a new process
 
@@ -627,8 +371,46 @@ void execute_external(vector<string> &args) {
         cerr << "Command not found: " << string(argv[0]) << endl << flush;
         exit(EXIT_FAILURE);
     } else if (pid > 0) { // Parent process
-        wait(nullptr); // Wait for the child process to finish
+        int status;
+        waitpid(pid, &status, 0); // Wait for the child process to finish
     } else {
         cerr << "Failed to create a new process\n";
+    }
+}
+
+int main(int argc, char **argv) {
+    // Check command-line arguments to decide the mode of operation
+    if (argc == 1) { // No filename provided, run in interactive mode
+        while (true) {
+            string input;
+
+            cout << "Mish:" << getcwd(nullptr, 0) << "$ ";
+            getline(cin, input); // Read the input line
+
+            if (!input.empty()) { // Check if the input line is not empty
+                Parser parser(input);
+                execute_all_commands(parser);
+            }
+        }
+    } else if (argc == 2) {
+        // Filename provided, run commands from the file (non-interactive mode)
+        ifstream file(argv[1]);
+        if (file.is_open()) {
+            string line; // Line read from the file
+            while (getline(file, line)) { // Read line by line from the file until EOF
+                if (!line.empty()) { // Check if the line is not empty
+                    Parser parser(line);
+                    execute_all_commands(parser);
+                }
+            }
+            file.close(); // Close the file
+        } else { // Failed to open the file
+            cerr << "Failed to open file: " << strerror(errno) << endl << flush; // Print error message
+            exit(EXIT_FAILURE); // Exit with an error
+        }
+    } else {
+        // More than one argument provided
+        cerr << "Usage: " << argv[0] << " [script file]" << endl << flush; // Print usage
+        exit(EXIT_FAILURE); // Exit with an error
     }
 }
