@@ -69,7 +69,7 @@ public:
         } else {
             vector<string> args;
             bool last_was_pipe = false;
-            for (auto i = 0; i < tokens.size(); ++i) {
+            for (size_t i = 0; i < tokens.size(); ++i) {
                 if (tokens[i] == "|") {
                     if (args.empty()) { // pipe operator at the beginning
                         is_valid = false;
@@ -280,7 +280,10 @@ void execute_cd(const vector<string> &args) {
         // If there are more than one argument (excluding the command itself), it's an error.
         cerr << "cd: Too many arguments" << endl;
         return;
-    }
+    } else if (args.size() == 1) {
+        cerr << "cd: Missing argument" << endl;
+        return;
+    } 
 
     if (args[1] == "..") {
         // change to the parent directory.
