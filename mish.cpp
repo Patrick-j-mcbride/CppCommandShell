@@ -283,13 +283,8 @@ void execute_cd(const vector<string> &args) {
     }
 
     if (args[1] == "..") {
-        // change to the home directory.
-        char *home = getenv("HOME");
-        if (home == nullptr) {
-            cerr << "cd: HOME environment variable not set" << endl;
-            return;
-        }
-        path = home;
+        // change to the parent directory.
+        path = "..";
     } else if (args[1] == "~") {
         // '~' is used, change to the home directory.
         char *home = getenv("HOME");
