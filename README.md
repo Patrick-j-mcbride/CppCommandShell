@@ -1,8 +1,9 @@
 
 # Mish: A Simple Command Shell
 
-Welcome to the official repository of **Mish**, a lightweight, simple command shell designed to offer a straightforward yet powerful command-line experience on Linux and macOS systems. Created by Patrick McBride
+Welcome to the official repository of **Mish**, a lightweight, simple command shell designed to offer a straightforward yet powerful command-line experience on Linux and macOS systems. 
 
+#### Author : Patrick McBride
 ## Features
 
 - **Two Modes of Operation**: Run interactively in user mode or execute commands from a `.sh` script file.
@@ -34,6 +35,9 @@ Before compiling Mish, ensure you have the GNU Readline library installed on you
 2. **Compile Mish**:
    - Navigate to the Mish source directory.
    - Run `make` to compile the shell. This will generate the `mish` executable.
+   - It should find your readline and compile with the following:
+     - g++ -g -Wall -std=c++14 -Werror -O -c mish.cpp -o mish.o
+     - g++ -g -Wall -std=c++14 -Werror -O -I -L -lreadline -o Mish mish.o
 
 ## Usage Instructions
 

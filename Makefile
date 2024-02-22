@@ -1,5 +1,5 @@
 CC=g++
-CXXFLAGS=-g -Wall -std=c++14
+CXXFLAGS=-g -Wall -std=c++14 -Werror -O
 SOURCES=mish.cpp
 OBJECTS=$(SOURCES:.cpp=.o)
 EXECUTABLE=Mish
@@ -15,6 +15,7 @@ READLINE_CFLAGS=$(shell find /usr/include /usr/local/include -name readline.h -e
 READLINE_LIBS=$(shell find /usr/lib /usr/local/lib -name libreadline.a -or -name libreadline.so -exec dirname {} \;)
 endif
 
+# If pkg-config failed, try to find Readline manually
 ifndef READLINE_CFLAGS
 READLINE_CFLAGS=$(shell find /usr/include /usr/local/include -name readline.h -exec dirname {} \;)
 READLINE_LIBS=$(shell find /usr/lib /usr/local/lib -name libreadline.a -or -name libreadline.so -exec dirname {} \;)
@@ -26,6 +27,7 @@ all: $(SOURCES) $(EXECUTABLE)
 
 $(EXECUTABLE): $(OBJECTS)
 	$(CC) $(CXXFLAGS) -I$(READLINE_INCLUDE) -L$(READLINE_LIB) -lreadline -o $@ $(OBJECTS)
+	rm -f $(OBJECTS)
 
 .cpp.o:
 	$(CC) $(CXXFLAGS) -c $< -o $@
