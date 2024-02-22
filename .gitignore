@@ -47,3 +47,5 @@ CMakeLists.txt
 /old
 
 *.txt
+.DS_Store
+Mish
