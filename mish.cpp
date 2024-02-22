@@ -160,7 +160,7 @@ void safe_execute(vector<string> &args) {
 void execute_from_parser(Parser &parser) {
     vector<pid_t> child_pids;
     int num_commands = parser.get_pipe_count() - 1;
-    int pipefd[2 * num_commands];
+    int pipefd[abs(2 * num_commands)];
     int count = -1;
 
     // Create the pipes.
