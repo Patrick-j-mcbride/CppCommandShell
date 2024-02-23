@@ -49,3 +49,4 @@ CMakeLists.txt
 *.txt
 .DS_Store
 Mish
+*.sh

@@ -44,8 +44,23 @@ public:
     // Constructor that takes a string and stores it in the data member
     explicit Parser(const string &input) {
         data = input;
+        preprocess();
         split();
         parse();
+    }
+
+    void preprocess() {
+        string processed;
+        for (char c : data) {
+            if (c == '|' || c == '&') {
+                processed += ' ';
+                processed += c;
+                processed += ' ';
+            } else {
+                processed += c;
+            }
+        }
+        data = processed;
     }
 
     // Method to split the input line into tokens
