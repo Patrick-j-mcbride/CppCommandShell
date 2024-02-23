@@ -44,11 +44,12 @@ public:
     // Constructor that takes a string and stores it in the data member
     explicit Parser(const string &input) {
         data = input;
-        preprocess();
-        split();
-        parse();
+        preprocess(); // Preprocess the input line
+        split(); // Split the input line into tokens
+        parse(); // Parse the tokens
     }
 
+    // Method to add whitespace around pipe and parallel operators
     void preprocess() {
         string processed;
         for (char c : data) {
@@ -79,13 +80,13 @@ public:
     }
 
     void parse() {
-        if (is_basic) {
+        if (is_basic) { // If the input line is a basic command (no pipe or parallel operators)
             commands.emplace_back(tokens);
         } else {
-            vector<string> args;
-            bool last_was_pipe = false;
+            vector<string> args; // Vector to store the arguments of each command
+            bool last_was_pipe = false; // Flag to check if the last token was a pipe operator
             for (size_t i = 0; i < tokens.size(); ++i) {
-                if (tokens[i] == "|") {
+                if (tokens[i] == "|") { // pipe operator
                     if (args.empty()) { // pipe operator at the beginning
                         is_valid = false;
                         cerr << "Error: Missing command before pipe operator\n";
@@ -113,7 +114,7 @@ public:
                         commands.emplace_back(args, last_was_pipe, true);
                         args.clear(); // clear the args vector
                     }
-                } else {
+                } else { // regular argument
                     args.push_back(tokens[i]);
                     if (i == tokens.size() - 1) { // last command
                         commands.emplace_back(args, last_was_pipe, false);
@@ -158,18 +159,19 @@ void safe_execute(vector<string> &args);
 
 
 void safe_execute(vector<string> &args) {
-    if (!handle_redirection(args)) {
+    if (!handle_redirection(args)) { // Handle redirections
         exit(EXIT_FAILURE);
     }
 
-    char *argv[args.size() + 1];
-    for (size_t i = 0; i < args.size(); ++i) {
+    char *argv[args.size() + 1]; // Create an array of C-style strings
+    for (size_t i = 0; i < args.size(); ++i) { // Copy the arguments to the array
         argv[i] = const_cast<char *>(args[i].c_str());
     }
-    argv[args.size()] = nullptr;
+    argv[args.size()] = nullptr; // Set the last element of the array to nullptr
 
     execvp(argv[0], argv); // Execute the command
-    cerr << "Command not found: " << string(argv[0]) << endl << flush;
+    perror("execvp"); // Print an error message
+    exit(EXIT_FAILURE); // Exit with an error
 }
 
 void execute_from_parser(Parser &parser) {
@@ -197,12 +199,12 @@ void execute_from_parser(Parser &parser) {
                 if (count < num_commands) { // For all but the last command, redirect stdout to the next pipe
                     dup2(pipefd[2 * count + 1], STDOUT_FILENO);
                 }
-                for (int i = 0; i < 2 * num_commands; ++i) {
+                for (int i = 0; i < 2 * num_commands; ++i) { // Close all pipe file descriptors
                     close(pipefd[i]);
                 }
             }
-            safe_execute(command.args);
-            exit(EXIT_SUCCESS);
+            safe_execute(command.args); // Execute the command
+            exit(EXIT_SUCCESS);  
         } else if (pid < 0) {
             perror("fork");
             exit(EXIT_FAILURE);
@@ -228,7 +230,7 @@ void execute_all_commands(Parser &parser) {
     if (parser.is_basic) { // If the input line is a basic command
         execute_command(parser.commands[0].args);
     } else {
-        execute_from_parser(parser);
+        execute_from_parser(parser); // Execute the commands from the parser
     }
 }
 
@@ -281,7 +283,7 @@ void execute_env_assignment(const vector<string> &args) {
     if (eq_pos != string::npos) { // If the equal sign is found
         string var = args[0].substr(0, eq_pos);
         string val = args[0].substr(eq_pos + 1);
-        if (setenv(var.c_str(), val.c_str(), 1) != 0) {
+        if (setenv(var.c_str(), val.c_str(), 1) != 0) { // Set the environment variable
             cerr << "export: " << strerror(errno) << endl;
         }
     } else {
@@ -326,7 +328,7 @@ void execute_cd(const vector<string> &args) {
 bool handle_redirection(vector<string> &tokens) {
     auto it = find_redirection_operator(tokens); // Find the first redirection operator
     while (it != tokens.end()) {
-        if (next(it) == tokens.end()) {
+        if (next(it) == tokens.end()) { // Check if the redirection operator is the last token
             cerr << "Redirection error: Missing filename\n";
             return false;
         }
@@ -345,7 +347,7 @@ bool handle_redirection(vector<string> &tokens) {
             flags = O_RDONLY;
         }
 
-        int fd = open(filename.c_str(), flags, 0644);
+        int fd = open(filename.c_str(), flags, 0644); // Open the file
         if (fd == -1) {
             cerr << "Redirection error: " << strerror(errno) << endl;
             return false;
@@ -376,11 +378,11 @@ void execute_external(vector<string> &args) {
             exit(EXIT_FAILURE);
         }
 
-        char *argv[args.size() + 1];
-        for (size_t i = 0; i < args.size(); ++i) {
+        char *argv[args.size() + 1]; // Create an array of C-style strings
+        for (size_t i = 0; i < args.size(); ++i) { // Copy the arguments to the array
             argv[i] = const_cast<char *>(args[i].c_str());
         }
-        argv[args.size()] = nullptr;
+        argv[args.size()] = nullptr; // Set the last element of the array to nullptr
 
         execvp(argv[0], argv); // Execute the command
         cerr << "Command not found: " << string(argv[0]) << endl << flush;
@@ -406,12 +408,10 @@ int main(int argc, char **argv) {
 
             if (input && *input) { // Check if the input line is not empty
                 add_history(input); // Add the input to the history list
-
-                string inputStr(input);
-                Parser parser(inputStr);
-                execute_all_commands(parser);
+                string inputStr(input); // Convert the input to a string
+                Parser parser(inputStr); // Create a parser object
+                execute_all_commands(parser); // Execute the commands from the parser
             }
-
             free(input); // Free the input line
         }
     } else if (argc == 2) { // Filename provided, run commands from the file (non-interactive mode)
@@ -420,8 +420,8 @@ int main(int argc, char **argv) {
             string line; // Line read from the file
             while (getline(file, line)) { // Read line by line from the file until EOF
                 if (!line.empty()) { // Check if the line is not empty
-                    Parser parser(line);
-                    execute_all_commands(parser);
+                    Parser parser(line); // Create a parser object
+                    execute_all_commands(parser); // Execute the commands from the parser
                 }
             }
             file.close(); // Close the file
